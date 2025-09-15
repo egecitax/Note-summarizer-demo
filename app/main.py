@@ -123,7 +123,20 @@ def admin_ping(user: User = Depends(get_current_user)):
 class NoteIn(BaseModel):
     raw_text: str
 
-@app.get("/notes")
+@app.post("/notes")
+async def create_note(body: NoteIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    note = Note(owner_id=user.id, raw_text=body.raw_text, status=NoteStatus.queued)
+    db.add(note); db.commit(); db.refresh(note)
+    await queue.put(note.id)
+    return {
+        "id": note.id,
+        "owner_id": note.owner_id,
+        "raw_text": note.raw_text,
+        "status": note.status.value,
+        "summary": note.summary,
+    }
+
+@app.get("/list-notes")
 def list_notes(
     status: Optional[NoteStatus] = None,
     owner_id: Optional[int] = None,
