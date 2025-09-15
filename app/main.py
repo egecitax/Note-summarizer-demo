@@ -8,6 +8,7 @@ from app.models import User, Role, Note, NoteStatus
 from app.password import hash_password, verify_password
 from app.JWT import create_token, decode_token
 from app.summarizer import summarize
+from typing import Optional
 
 app = FastAPI(title="Notes API")
 security = HTTPBearer()
@@ -122,18 +123,49 @@ def admin_ping(user: User = Depends(get_current_user)):
 class NoteIn(BaseModel):
     raw_text: str
 
-@app.post("/notes")
-async def create_note(body: NoteIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    note = Note(owner_id=user.id, raw_text=body.raw_text, status=NoteStatus.queued)
-    db.add(note); db.commit(); db.refresh(note)
-    await queue.put(note.id)
-    return {
-        "id": note.id,
-        "owner_id": note.owner_id,
-        "raw_text": note.raw_text,
-        "status": note.status.value,
-        "summary": note.summary,
-    }
+@app.get("/notes")
+def list_notes(
+    status: Optional[NoteStatus] = None,
+    owner_id: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+    creds: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    """Admin: tüm notları görebilir (+ filtreler)
+       Agent: yalnızca kendi notlarını görür (owner_id param’ı yok sayılır)
+    """
+    user = get_current_user(creds, db)
+
+    q = db.query(Note)
+
+    if user.role != Role.ADMIN:
+        # Agent ise kendi notlarıyla sınırla
+        q = q.filter(Note.owner_id == user.id)
+    else:
+        # Admin ise opsiyonel filtreler
+        if owner_id is not None:
+            q = q.filter(Note.owner_id == owner_id)
+        if status is not None:
+            q = q.filter(Note.status == status)
+
+    notes = (
+        q.order_by(Note.id.desc())
+         .offset(offset)
+         .limit(limit)
+         .all()
+    )
+
+    return [
+        {
+            "id": n.id,
+            "owner_id": n.owner_id,
+            "raw_text": n.raw_text,
+            "status": n.status.value,
+            "summary": n.summary,
+        }
+        for n in notes
+    ]
 
 @app.get("/notes/{note_id}")
 def get_note(note_id:int,user=Depends(get_current_user),db:Session=Depends(get_db)):
